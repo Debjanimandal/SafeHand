@@ -1,0 +1,85 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #000000;
+  --surface: #0a0a0a;
+  --border: #1a1a1a;
+  --border-bright: #2a2a2a;
+  --text: #ffffff;
+  --text-muted: #666666;
+  --text-dim: #333333;
+  --accent: #ffffff;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', sans-serif;
+  min-height: 100vh;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: #222; border-radius: 2px; }
+
+/* Grid noise texture */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+  background-size: 40px 40px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Skeleton shimmer */
+@keyframes shimmer {
+  0% { background-position: -500px 0; }
+  100% { background-position: 500px 0; }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, #111 25%, #1a1a1a 50%, #111 75%);
+  background-size: 1000px 100%;
+  animation: shimmer 1.8s infinite linear;
+  border-radius: 4px;
+}
+
+/* Glow ring */
+.glow-ring {
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.08), 0 0 30px rgba(255,255,255,0.04);
+}
+
+/* Button base */
+.btn {
+  @apply inline-flex items-center justify-center gap-2 px-6 py-3 font-mono text-sm font-bold tracking-widest uppercase transition-all duration-200 border cursor-pointer select-none;
+}
+
+.btn-primary {
+  @apply btn bg-white text-black border-white hover:bg-transparent hover:text-white;
+}
+
+.btn-ghost {
+  @apply btn bg-transparent text-white border-white/20 hover:border-white/60;
+}
+
+/* Card */
+.card {
+  @apply border border-white/[0.08] bg-white/[0.02] backdrop-blur-sm;
+}
