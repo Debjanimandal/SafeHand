@@ -1,0 +1,29 @@
+{
+  "name": "@proofly/sdk",
+  "version": "0.1.0",
+  "description": "Official TypeScript SDK for integrating Proofly Wallet & AI Policy Layer in web applications.",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.mjs"
+  },
+  "keywords": [
+    "proofly",
+    "web3",
+    "ai-agent",
+    "policy",
+    "wallet",
+    "zero-knowledge",
+    "eip-1193",
+    "eip-6963"
+  ],
+  "author": "Proofly Team",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "typescript": "^5.7.2"
+  }
+}
