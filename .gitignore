@@ -1,0 +1,17 @@
+node_modules/
+.pnpm-store/
+.next/
+dist/
+.turbo/
+.env
+.env.*
+!.env.example
+coverage/
+*.log
+apps/extension/.output/
+*.tsbuildinfo
+contracts/artifacts/
+contracts/cache/
+contracts/deployments/base-sepolia.json
+contracts/deployments/base-sepolia.env
+

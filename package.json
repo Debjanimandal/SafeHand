@@ -1,0 +1,17 @@
+{
+  "name": "proofly",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.6.4",
+  "scripts": {
+    "dev:web": "pnpm --filter @proofly/web dev",
+    "dev:extension": "pnpm --filter @proofly/extension dev",
+    "build:contracts": "pnpm --filter @proofly/contracts build",
+    "deploy:contracts:base-sepolia": "pnpm --filter @proofly/contracts deploy:base-sepolia",
+    "live:sync-contract-env": "node scripts/sync-contract-env.mjs",
+    "live:check": "node scripts/live-readiness.mjs",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "node --test packages/sdk/test/*.test.mjs"
+  }
+}
