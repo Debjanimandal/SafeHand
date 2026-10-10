@@ -1,0 +1,50 @@
+{
+  "manifest_version": 3,
+  "name": "SafeHand Wallet",
+  "version": "0.1.0",
+  "description": "Monochrome, ZK-human wallet with AI leash policy controls.",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "unlimitedStorage"
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "https://sepolia.base.org/*",
+    "https://api.coingecko.com/*",
+    "https://*.worldcoin.org/*",
+    "https://*.id.worldcoin.org/*"
+  ],
+  "background": {
+    "service_worker": "src/background/service-worker.ts",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "SafeHand",
+    "default_popup": "src/popup/index.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/injected/eip1193-provider.ts"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content/relay.ts"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "src/injected/eip1193-provider.ts"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ]
+}
