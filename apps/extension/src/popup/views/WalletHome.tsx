@@ -1,20 +1,21 @@
-import { IDKitRequestWidget, orbLegacy, type IDKitErrorCodes, type IDKitResult, type RpContext } from '@worldcoin/idkit';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Hex } from 'viem';
 import { runtimeRequest } from '../../background/client';
 import { getConfiguredContracts } from '../../chain/contracts';
 import type { AgentPolicy } from '../../shared/types';
 import { useWalletStore } from '../../store/wallet';
 import {
-  attestWithServer,
-  generateLocalAttestation,
-  getZkStatus,
-  normalizeWorldIdResult,
-  saveWorldIdProof,
-  verifyProofWithServer,
-  type StoredWorldIdProof,
-  type ZkStatus,
-} from '../../zk/world-id';
+  ACCEPTED_ID_MIME_TYPES,
+  MAX_ID_IMAGE_BYTES,
+  classifyGovernmentId,
+  clearGovId,
+  extractGovIdDetails,
+  getGovId,
+  hashImageBytes,
+  saveGovId,
+  type StoredGovId,
+} from '../../identity/gov-id';
+import { runOcr, terminateOcr } from '../../identity/ocr';
 import { ErrorBanner } from '../components/ErrorBanner';
 
 const contracts = getConfiguredContracts();
@@ -464,228 +465,301 @@ function PolicyTab({ address }: { address: string }) {
   );
 }
 
-// ─── Identity Tab ─────────────────────────────────────────────────────────────
+// ─── Government ID Vault ──────────────────────────────────────────────────────
 
-function IdentityTab({ address }: { address: string }) {
-  const [zkStatus, setZkStatus] = useState<ZkStatus | null>(null);
+type GovIdPhase = 'idle' | 'reading' | 'scanning' | 'classifying' | 'done';
+
+function readFileBytes(file: File): Promise<Uint8Array> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(new Uint8Array(reader.result as ArrayBuffer));
+    reader.onerror = () => reject(new Error('Could not read the selected file.'));
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+function GovIdSection(): JSX.Element {
+  const [record, setRecord] = useState<StoredGovId | null>(null);
   const [loading, setLoading] = useState(true);
-  const [open, setOpen] = useState(false);
-  const [rpContext, setRpContext] = useState<RpContext | null>(null);
-  const [loadingRp, setLoadingRp] = useState(false);
+  const [phase, setPhase] = useState<GovIdPhase>('idle');
+  const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [attestingLocal, setAttestingLocal] = useState(false);
+  const [rejected, setRejected] = useState<string[] | null>(null);
+  const [copied, setCopied] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const worldAppId = import.meta.env.VITE_WORLD_APP_ID as string;
-  const worldAction = (import.meta.env.VITE_WORLD_ACTION as string) || 'proofly-human-verify';
-  const worldRpId = (import.meta.env.VITE_WORLD_RP_ID as string) || undefined;
+  useEffect(() => {
+    void (async () => {
+      setRecord(await getGovId());
+      setLoading(false);
+    })();
+    // Free the OCR worker when the view goes away.
+    return () => { void terminateOcr(); };
+  }, []);
 
-  async function reload(): Promise<void> {
-    setLoading(true);
-    const status = await getZkStatus();
-    setZkStatus(status);
-    setLoading(false);
-  }
+  const busy = phase !== 'idle' && phase !== 'done';
 
-  useEffect(() => { void reload(); }, []);
-
-  async function startVerification(): Promise<void> {
+  async function handleFile(file: File): Promise<void> {
     setError(null);
-    if (!apiBaseUrl || !worldRpId) {
-      setError('Verification server not configured. Set VITE_PROOFLY_API_BASE_URL and VITE_WORLD_RP_ID.');
+    setRejected(null);
+    setProgress(0);
+
+    if (!ACCEPTED_ID_MIME_TYPES.includes(file.type)) {
+      setError('Unsupported file. Upload a PNG, JPG, WEBP or BMP image of your government ID.');
       return;
     }
-    setLoadingRp(true);
-    try {
-      const res = await fetch(`${apiBaseUrl}/api/zk/worldid/rp-signature`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: worldAction }),
-      });
-      if (!res.ok) throw new Error('Failed to get verification signature.');
-      const { sig, nonce, created_at, expires_at } = (await res.json()) as {
-        sig: string; nonce: string; created_at: number; expires_at: number;
-      };
-      setRpContext({ rp_id: worldRpId, nonce, created_at, expires_at, signature: sig });
-      setOpen(true);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setLoadingRp(false);
+    if (file.size > MAX_ID_IMAGE_BYTES) {
+      setError('Image is too large. Please upload a file under 8 MB.');
+      return;
     }
-  }
 
-  async function handleVerify(result: IDKitResult): Promise<void> {
-    if (!apiBaseUrl) throw new Error('Verification server not configured.');
     try {
-      await verifyProofWithServer(result, address as Hex, apiBaseUrl, worldRpId);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Verification failed';
-      setError(msg.length > 200 ? msg.slice(0, 200) + '…' : msg);
-      setOpen(false);
-      setRpContext(null);
-      throw err;
-    }
-  }
+      setPhase('reading');
+      const bytes = await readFileBytes(file);
 
-  function onIDKitError(code: IDKitErrorCodes): void {
-    setError(`World ID error (${String(code)}). Check your app credentials or try again.`);
-    setOpen(false);
-    setRpContext(null);
-  }
+      // OCR runs fully locally — no upload.
+      setPhase('scanning');
+      const { text } = await runOcr(file, (p) => setProgress(Math.round(p * 100)));
 
-  async function startLocalAttestation(): Promise<void> {
-    setError(null);
-    setAttestingLocal(true);
-    try {
-      const proof = await generateLocalAttestation(address as Hex, worldAction);
-      await saveWorldIdProof(proof);
-      if (apiBaseUrl) {
-        await attestWithServer(proof, apiBaseUrl);
+      // Gate: only government IDs are allowed to produce a hash.
+      setPhase('classifying');
+      const classification = classifyGovernmentId(text);
+
+      if (!classification.isGovernmentId) {
+        setPhase('idle');
+        setRejected(
+          classification.matchedSignals.length
+            ? classification.matchedSignals
+            : ['No government-ID markers detected'],
+        );
+        setError(
+          'This does not look like a government-issued ID. No identity hash was generated. Upload a passport, driver\u2019s license, national ID or similar.',
+        );
+        return;
       }
-      await reload();
+
+      // Government ID confirmed → extract details + hash the raw bytes.
+      const details = extractGovIdDetails(text, classification.documentType);
+      const identityHash = await hashImageBytes(bytes);
+
+      const stored: StoredGovId = {
+        identityHash,
+        details,
+        rawText: text.trim(),
+        mimeType: file.type,
+        fileName: file.name,
+        savedAt: Date.now(),
+      };
+
+      await saveGovId(stored);
+      setRecord(stored);
+      setPhase('done');
+      setTimeout(() => setPhase('idle'), 600);
     } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setAttestingLocal(false);
+      setPhase('idle');
+      const detail = err instanceof Error ? err.message : String(err);
+      console.error('[SafeHand] ID processing failed:', err);
+      setError(`Failed to process the ID image: ${detail || 'unknown error'}`);
     }
   }
 
-  function onSuccess(result: IDKitResult): void {
-    try {
-      const normalized = normalizeWorldIdResult(result);
-      const record: StoredWorldIdProof = {
-        ...normalized,
-        action: worldAction,
-        walletAddress: address as Hex,
-        verifiedAt: Date.now(),
-      };
-      void saveWorldIdProof(record).then(() => void reload());
-    } catch { /* normalization errors are non-fatal */ }
+  function onPick(e: React.ChangeEvent<HTMLInputElement>): void {
+    const file = e.target.files?.[0];
+    if (file) void handleFile(file);
+    // Allow re-selecting the same file.
+    e.target.value = '';
+  }
+
+  async function removeId(): Promise<void> {
+    await clearGovId();
+    setRecord(null);
+    setError(null);
+    setRejected(null);
+  }
+
+  function copyHash(): void {
+    if (!record) return;
+    void navigator.clipboard.writeText(record.identityHash).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
   }
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-12">
+      <div className="flex items-center justify-center py-8">
         <div className="size-4 animate-spin rounded-full border-2 border-white/20 border-t-white/80" />
       </div>
     );
   }
 
-  if (zkStatus?.verified && zkStatus.proof) {
-    const { proof } = zkStatus;
-    const verifiedDate = new Date(proof.verifiedAt).toLocaleDateString(undefined, { dateStyle: 'medium' });
-    const expiryDate = zkStatus.expiresAt
-      ? new Date(zkStatus.expiresAt).toLocaleDateString(undefined, { dateStyle: 'medium' })
-      : '—';
+  const phaseLabel: Record<GovIdPhase, string> = {
+    idle: '',
+    reading: 'Reading image\u2026',
+    scanning: `Scanning ID locally\u2026 ${progress}%`,
+    classifying: 'Verifying it is a government ID\u2026',
+    done: 'Identity hash generated \u2713',
+  };
+
+  // ── Stored state ──
+  if (record) {
+    const d = record.details;
+    const detailRows: Array<{ label: string; value?: string }> = [
+      { label: 'Type', value: d.documentType },
+      { label: 'Country', value: d.country },
+      { label: 'ID Number', value: d.documentNumber },
+      { label: 'Name', value: d.name },
+      { label: 'Date of Birth', value: d.dateOfBirth },
+      { label: 'Expiry', value: d.expiryDate },
+    ].filter((r) => r.value);
 
     return (
       <div className="space-y-3">
         <div className="rounded-2xl border border-emerald-900/50 bg-emerald-950/20 p-4">
           <div className="flex items-center gap-3">
             <div className="flex size-10 items-center justify-center rounded-xl border border-emerald-800/60 bg-emerald-950/40">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} className="size-5 text-emerald-400" aria-hidden="true">
-                <polyline points="20 6 9 17 4 12" />
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} className="size-5 text-emerald-400" aria-hidden="true">
+                <rect x="3" y="4" width="18" height="16" rx="2" />
+                <circle cx="9" cy="10" r="2" />
+                <path d="M13 9h5M13 13h5M5 16h14" />
               </svg>
             </div>
             <div>
-              <p className="text-sm font-semibold text-emerald-300">SafeHand Verified</p>
-              <p className="text-[10px] text-emerald-600 capitalize">
-                {proof.verificationLevel ?? 'orb'} · verified {verifiedDate}
-              </p>
+              <p className="text-sm font-semibold text-emerald-300">Government ID Linked</p>
+              <p className="text-[10px] text-emerald-600">{d.documentType} \u00b7 stored locally only</p>
             </div>
           </div>
         </div>
 
-        <div className="space-y-3 rounded-2xl border border-border bg-surface p-4">
-          <div>
-            <p className="mb-1 text-[10px] uppercase tracking-widest text-muted">Nullifier Hash</p>
-            <p className="break-all font-mono text-[10px] text-subtext">
-              {proof.nullifierHash.slice(0, 18)}…{proof.nullifierHash.slice(-8)}
-            </p>
+        {/* Identity hash — the shareable, no-leak credential */}
+        <div className="rounded-2xl border border-border bg-surface p-4">
+          <div className="mb-1.5 flex items-center justify-between">
+            <p className="text-[10px] uppercase tracking-widest text-muted">Identity Hash</p>
+            <button
+              type="button"
+              onClick={copyHash}
+              className="flex size-6 items-center justify-center rounded-md border border-border text-muted transition-all hover:border-white/20 hover:text-white active:scale-95"
+              title="Copy identity hash"
+            >
+              {copied ? <CheckIcon className="size-3" /> : <CopyIcon />}
+            </button>
           </div>
-          <div className="grid grid-cols-2 gap-3 border-t border-white/5 pt-3">
-            <div>
-              <p className="mb-1 text-[10px] uppercase tracking-widest text-muted">Registered</p>
-              <p className="text-xs text-subtext">{verifiedDate}</p>
-            </div>
-            <div>
-              <p className="mb-1 text-[10px] uppercase tracking-widest text-muted">Expires</p>
-              <p className="text-xs text-subtext">{expiryDate}</p>
-            </div>
-          </div>
+          <p className="break-all font-mono text-[10px] leading-relaxed text-subtext">
+            {record.identityHash}
+          </p>
+          <p className="mt-2 border-t border-white/5 pt-2 text-[10px] leading-relaxed text-muted">
+            This one-way hash is what SafeHand presents to external sites. Your ID details never leave this device.
+          </p>
         </div>
+
+        {/* Extracted details (plaintext, local) */}
+        {detailRows.length > 0 && (
+          <div className="overflow-hidden rounded-2xl border border-border bg-surface">
+            <p className="px-4 pt-3 text-[10px] uppercase tracking-widest text-muted">Saved Details (local)</p>
+            <div className="mt-2 border-t border-border">
+              {detailRows.map(({ label, value }) => (
+                <div key={label} className="flex items-center justify-between gap-3 px-4 py-2.5 even:bg-card/30">
+                  <span className="text-[11px] text-muted">{label}</span>
+                  <span className="max-w-[60%] truncate text-right font-mono text-[11px] text-subtext">{value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={() => { void removeId(); }}
+          className="w-full rounded-xl bg-white px-4 py-3 text-sm font-semibold text-black transition-opacity hover:opacity-90"
+        >
+          Remove Government ID
+        </button>
       </div>
     );
   }
 
+  // ── Upload state ──
   return (
     <div className="space-y-3">
       <div className="rounded-2xl border border-border bg-surface p-4">
         <div className="mb-3 flex items-center gap-3">
           <div className="flex size-10 items-center justify-center rounded-xl border border-border bg-card text-muted">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} className="size-5" aria-hidden="true">
-              <circle cx="12" cy="12" r="10" />
-              <path d="M12 8v4M12 16h.01" />
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <circle cx="9" cy="10" r="2" />
+              <path d="M13 9h5M13 13h5M5 16h14" />
             </svg>
           </div>
           <div>
-            <p className="text-sm font-semibold text-white">Identity Unverified</p>
-            <p className="text-[10px] text-muted">Prove you are human with SafeHand.</p>
+            <p className="text-sm font-semibold text-white">Upload Government ID</p>
+            <p className="text-[10px] text-muted">Passport, driver\u2019s license, national ID\u2026</p>
           </div>
         </div>
 
         <p className="mb-4 text-[11px] leading-relaxed text-muted">
-          SafeHand is a privacy-preserving proof of personhood. Your identity stays anonymous —
-          only a zero-knowledge proof is recorded on-chain.
+          The image is scanned <strong className="text-subtext">locally in your browser</strong>. If it is a valid
+          government ID, SafeHand saves the details on this device and generates a one-way hash you can use to log in
+          elsewhere without ever revealing the document.
         </p>
 
-        {rpContext && (
-          <IDKitRequestWidget
-            open={open}
-            onOpenChange={setOpen}
-            app_id={worldAppId as `app_${string}`}
-            action={worldAction}
-            rp_context={rpContext}
-            allow_legacy_proofs
-            preset={orbLegacy({ signal: address })}
-            handleVerify={handleVerify}
-            onSuccess={onSuccess}
-            onError={onIDKitError}
-          />
-        )}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept={ACCEPTED_ID_MIME_TYPES.join(',')}
+          onChange={onPick}
+          className="hidden"
+        />
 
-        {error ? (
-          <p className="mb-3 rounded-xl border border-red-900/40 bg-red-950/20 px-3 py-2 text-[10px] text-red-400">
+        {rejected && !busy ? (
+          <div className="mb-3 rounded-xl border border-amber-900/40 bg-amber-950/20 px-3 py-2">
+            <p className="text-[10px] font-semibold text-amber-400">Not accepted \u2014 no hash generated</p>
+            <p className="mt-1 text-[10px] text-amber-500/80">
+              Detected: {rejected.join(', ')}
+            </p>
+          </div>
+        ) : null}
+
+        {error && !busy ? (
+          <p className="mb-3 rounded-xl border border-red-900/40 bg-red-950/20 px-3 py-2 text-[10px] leading-relaxed text-red-400">
             {error}
           </p>
         ) : null}
 
+        {busy ? (
+          <div className="mb-3 space-y-2 rounded-xl border border-white/10 bg-card px-3 py-3">
+            <div className="flex items-center gap-2">
+              <div className="size-3.5 animate-spin rounded-full border-2 border-white/20 border-t-white/80" />
+              <p className="text-[11px] text-subtext">{phaseLabel[phase]}</p>
+            </div>
+            {phase === 'scanning' ? (
+              <div className="h-1 w-full overflow-hidden rounded-full bg-white/5">
+                <div className="h-full rounded-full bg-emerald-400 transition-all duration-200" style={{ width: `${progress}%` }} />
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
         <button
           type="button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={busy}
           className="w-full rounded-xl bg-white px-4 py-3 text-sm font-semibold text-black transition-opacity hover:opacity-90 disabled:opacity-40"
-          onClick={() => { void startVerification(); }}
-          disabled={loadingRp || attestingLocal}
         >
-          {loadingRp ? 'Preparing\u2026' : 'Verify with SafeHand'}
+          {busy ? 'Processing\u2026' : 'Choose ID Image'}
         </button>
 
-        <div className="flex items-center gap-2 py-1">
-          <div className="h-px flex-1 bg-white/10" />
-          <span className="text-[10px] text-muted">or</span>
-          <div className="h-px flex-1 bg-white/10" />
-        </div>
-
-        <button
-          type="button"
-          className="w-full rounded-xl border border-border bg-elevated px-4 py-2.5 text-xs font-semibold text-subtext transition-all hover:border-white/20 hover:text-white disabled:opacity-40"
-          onClick={() => { void startLocalAttestation(); }}
-          disabled={loadingRp || attestingLocal}
-        >
-          {attestingLocal ? 'Generating proof\u2026' : 'Prove with Wallet Key'}
-        </button>
+        <p className="mt-2.5 text-center text-[10px] text-muted">
+          PNG \u00b7 JPG \u00b7 WEBP \u00b7 BMP \u00b7 max 8 MB \u00b7 never uploaded
+        </p>
       </div>
     </div>
   );
+}
+
+// ─── Identity Tab ─────────────────────────────────────────────────────────────
+
+function IdentityTab(_: { address: string }): JSX.Element {
+  return <GovIdSection />;
 }
 
 // ─── Keys Tab ────────────────────────────────────────────────────────────────

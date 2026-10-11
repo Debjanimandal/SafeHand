@@ -11,7 +11,10 @@ export type ProoflyRpcMethod =
   | 'eth_signTypedData_v4'
   | 'eth_sendTransaction'
   | 'wallet_switchEthereumChain'
-  | 'wallet_addEthereumChain';
+  | 'wallet_addEthereumChain'
+  // SafeHand custom: returns the locally-stored government-ID identity hash
+  // (and non-PII metadata) so relying dApps can prove the ID without PII.
+  | 'safehand_getIdentityHash';
 
 export interface BridgeRpcRequest {
   namespace: typeof PROOFLY_BRIDGE_NAMESPACE;

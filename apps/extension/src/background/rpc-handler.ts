@@ -15,6 +15,7 @@ import type {
   PendingApprovalRequest,
 } from '../shared/types';
 import { getWalletAddress } from '../wallet/keys';
+import { getGovId } from '../identity/gov-id';
 import {
   buildCompositeSignature,
   signAndBroadcastTransaction,
@@ -158,6 +159,21 @@ export async function routeRpcRequest(request: BridgeRpcRequest, context: RpcCon
     case 'eth_accounts': {
       // Silent — return current accounts without prompting.
       return walletAddress ? [walletAddress] : [];
+    }
+
+    case 'safehand_getIdentityHash': {
+      // Returns the one-way identity hash derived from the user's government ID.
+      // Only the hash + non-PII metadata is exposed — never the raw ID details.
+      const govId = await getGovId();
+      if (!govId) {
+        throw new RpcMethodError(4100, 'No government ID linked in SafeHand. Add one in the ID tab first.');
+      }
+      return {
+        identityHash: govId.identityHash,
+        documentType: govId.details.documentType,
+        country: govId.details.country ?? null,
+        savedAt: govId.savedAt,
+      };
     }
 
     case 'eth_requestAccounts': {

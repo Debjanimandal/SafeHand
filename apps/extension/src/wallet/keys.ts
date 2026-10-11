@@ -2,7 +2,7 @@ import type { Hex } from 'viem';
 import { bytesToHex, hexToBytes } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import type { EncryptedPayload } from '../storage/encryption';
-import { decryptBytes, encryptBytes } from '../storage/encryption';
+import { PBKDF2_ITERATIONS, decryptBytes, encryptBytes } from '../storage/encryption';
 
 export interface StoredWallet extends EncryptedPayload {
   address: Hex;
@@ -76,4 +76,35 @@ export async function decryptPrivateKey(password: string): Promise<Uint8Array> {
 
 export function privateKeyBytesToHex(bytes: Uint8Array): Hex {
   return bytesToHex(bytes);
+}
+
+/**
+ * Transparent, one-time speed migration: if the stored wallet was encrypted with
+ * an older/higher PBKDF2 iteration count (slow unlock), re-encrypt it at the
+ * current faster count. Called after a successful unlock with the verified
+ * password. Best-effort — a failure here never blocks unlocking.
+ */
+export async function migrateWalletKdfIfNeeded(password: string): Promise<boolean> {
+  const wallet = await getStoredWallet();
+  if (!wallet) return false;
+
+  // Already at (or below) the current iteration count — nothing to do.
+  if ((wallet.iterations ?? Number.MAX_SAFE_INTEGER) <= PBKDF2_ITERATIONS) {
+    return false;
+  }
+
+  const keyBytes = await decryptBytes(password, wallet);
+  try {
+    if (keyBytes.length !== 32) return false;
+    const reencrypted = await encryptBytes(password, keyBytes);
+    const updated: StoredWallet = {
+      ...reencrypted,
+      address: wallet.address,
+      createdAt: wallet.createdAt,
+    };
+    await setToStorage(WALLET_KEY, updated);
+    return true;
+  } finally {
+    erase(keyBytes);
+  }
 }

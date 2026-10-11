@@ -107,9 +107,11 @@ export default function App(): JSX.Element {
 
   function getViewKey(): ViewKey {
     if (!loaded) return 'loading';
-    if (pendingApproval && address) return 'approval';
     if (!address) return 'setup';
+    // A dApp connect/sign request is pending. Like any wallet, the user must
+    // unlock first (one-time per session); only then do we show the approval.
     if (!unlocked) return 'unlock';
+    if (pendingApproval) return 'approval';
     return 'home';
   }
 

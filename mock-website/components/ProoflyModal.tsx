@@ -3,9 +3,11 @@ import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   getSafeHandProvider,
+  fetchSafeHandIdentityHash,
   queryOnChainRegistry,
   BASE_SEPOLIA_CHAIN_ID_HEX,
   EIP1193Provider,
+  type SafeHandIdentityHash,
 } from "@/lib/proofly";
 
 interface ProoflyModalProps {
@@ -33,6 +35,7 @@ export default function ProoflyModal({ open, onClose, onVerified, mode }: Proofl
   const [connectedAddress, setConnectedAddress] = useState<string>("");
   const [onChainVerified, setOnChainVerified] = useState<boolean>(false);
   const [resultHash, setResultHash] = useState<string>("");
+  const [idHash, setIdHash] = useState<SafeHandIdentityHash | null>(null);
 
   useEffect(() => {
     if (!open) {
@@ -41,6 +44,7 @@ export default function ProoflyModal({ open, onClose, onVerified, mode }: Proofl
       setConnectedAddress("");
       setResultHash("");
       setOnChainVerified(false);
+      setIdHash(null);
       return;
     }
 
@@ -141,28 +145,54 @@ export default function ProoflyModal({ open, onClose, onVerified, mode }: Proofl
 
       setConnectedAddress(targetAddr);
 
-      // 2. Query real on-chain registry on Base Sepolia
-      const verified = await queryOnChainRegistry(targetAddr);
-      setOnChainVerified(verified);
+      // 2. For ID mode, pull the government-ID identity hash from the wallet
+      //    FIRST — this is a fast local read and is what the dApp actually
+      //    verifies against. No PII leaves the extension.
+      let fetchedIdHash: SafeHandIdentityHash | null = null;
+      if (mode === "id") {
+        const idResult = await fetchSafeHandIdentityHash(provider);
+        if (!idResult.hash) {
+          setState("error");
+          setErrorMessage(
+            idResult.reason === "unsupported"
+              ? (idResult.message ??
+                  "Reload the SafeHand extension at chrome://extensions, then refresh this page.")
+              : "No government ID is linked in SafeHand. Open the extension → ID tab and upload a government ID first.",
+          );
+          return;
+        }
+        fetchedIdHash = idResult.hash;
+        setIdHash(fetchedIdHash);
+      }
 
-      // 3. Request cryptographic authority challenge signature
+      // 3. Kick off the on-chain registry check in the background — it must not
+      //    block signing. It resolves/updates the badge whenever it finishes.
+      void queryOnChainRegistry(targetAddr)
+        .then((verified) => setOnChainVerified(verified))
+        .catch(() => setOnChainVerified(false));
+
+      // 4. Request cryptographic authority challenge signature. For ID mode the
+      //    challenge binds the government-ID hash to the wallet signature so the
+      //    proof is cryptographically tied to the specific credential.
       setState("requesting_signature");
       const timestamp = new Date().toISOString();
       const challenge =
         mode === "age"
           ? `[SafeHand Humanity & Age Verification]\nCivicVault Access Gate\nWallet: ${targetAddr}\nRequirement: Age 18+\nTimestamp: ${timestamp}`
-          : `[SafeHand Unique Identity Verification]\nCivicVault Access Gate\nWallet: ${targetAddr}\nRequirement: Government ID ZK Proof\nTimestamp: ${timestamp}`;
+          : `[SafeHand Unique Identity Verification]\nCivicVault Access Gate\nWallet: ${targetAddr}\nRequirement: Government ID ZK Proof\nIdentity Hash: ${fetchedIdHash?.identityHash}\nDocument: ${fetchedIdHash?.documentType}\nTimestamp: ${timestamp}`;
 
       const signature = (await provider.request({
         method: "personal_sign",
         params: [challenge, targetAddr],
       })) as string;
 
-      setResultHash(signature);
+      // For ID mode the credential proof is the government-ID identity hash.
+      const proofHash = mode === "id" && fetchedIdHash ? fetchedIdHash.identityHash : signature;
+      setResultHash(proofHash);
       setState("completed");
 
       setTimeout(() => {
-        onVerified(targetAddr, signature);
+        onVerified(targetAddr, proofHash);
       }, 900);
     } catch (err: unknown) {
       const error = err as { code?: number; message?: string };
@@ -367,8 +397,26 @@ export default function ProoflyModal({ open, onClose, onVerified, mode }: Proofl
                             {onChainVerified ? "Verified On-Chain" : "Authority Confirmed"}
                           </span>
                         </div>
+
+                        {mode === "id" && idHash && (
+                          <div className="border-t border-white/10 pt-2 space-y-1">
+                            <div className="flex items-center justify-between">
+                              <span className="font-mono text-[10px] text-white/40 uppercase">Credential</span>
+                              <span className="font-mono text-[10px] text-white">{idHash.documentType}</span>
+                            </div>
+                            <p className="font-mono text-[10px] text-emerald-400/80 uppercase">
+                              Government ID Hash (proof)
+                            </p>
+                            <p className="font-mono text-[10px] text-emerald-300 break-all leading-tight">
+                              {idHash.identityHash}
+                            </p>
+                          </div>
+                        )}
+
                         <div>
-                          <p className="font-mono text-[10px] text-white/40 uppercase">Signature Hash</p>
+                          <p className="font-mono text-[10px] text-white/40 uppercase">
+                            {mode === "id" ? "Wallet Signature" : "Signature Hash"}
+                          </p>
                           <p className="font-mono text-[10px] text-white/60 break-all leading-tight">
                             {resultHash.slice(0, 42)}…
                           </p>

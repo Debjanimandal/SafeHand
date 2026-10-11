@@ -24,6 +24,9 @@
     "default_title": "SafeHand",
     "default_popup": "src/popup/index.html"
   },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
@@ -41,6 +44,14 @@
     {
       "resources": [
         "src/injected/eip1193-provider.ts"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    },
+    {
+      "resources": [
+        "tesseract/*"
       ],
       "matches": [
         "<all_urls>"

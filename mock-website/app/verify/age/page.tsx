@@ -7,7 +7,7 @@ import StepIndicator from "@/components/StepIndicator";
 import ProoflyModal from "@/components/ProoflyModal";
 import { useApp } from "@/lib/context";
 
-const STEPS = ["Connect Wallet", "Prove Age", "Prove Identity", "Dashboard"];
+const STEPS = ["Connect Wallet", "Prove Age", "Dashboard"];
 
 export default function AgeVerifyPage() {
   const router = useRouter();
@@ -24,7 +24,8 @@ export default function AgeVerifyPage() {
 
   function handleVerified(_addr: string, hash: string) {
     setAgeProof(hash);
-    setTimeout(() => router.push("/verify/id"), 500);
+    // Age proof is the only gate — go straight to the portal.
+    setTimeout(() => router.push("/dashboard"), 500);
   }
 
   return (
@@ -43,7 +44,7 @@ export default function AgeVerifyPage() {
           {/* Card */}
           <div className="border border-white/10 bg-white/[0.02] p-8 space-y-6">
             <div>
-              <p className="font-mono text-xs text-white/30 uppercase tracking-widest mb-2">Step 2 of 3</p>
+              <p className="font-mono text-xs text-white/30 uppercase tracking-widest mb-2">Step 2 of 2</p>
               <h2 className="text-xl font-bold text-white">Age Verification</h2>
               <p className="text-sm text-white/40 mt-1">
                 CivicVault requires you to be 18+. Prove your age privately using a Zero-Knowledge proof via SafeHand — no data leaves your device.

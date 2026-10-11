@@ -119,7 +119,18 @@ chrome.runtime.onMessage.addListener((message: { type?: string; payload?: unknow
           const keyBytes = await decryptPrivateKey(payload.password);
           keyBytes.fill(0);
           sessionPassword = payload.password;
+          // Respond immediately so the UI unlocks without waiting.
           sendResponse({ ok: true });
+          // Then, in the background, upgrade an old slow keystore to the faster
+          // KDF so future unlocks are quick. Best-effort; never blocks.
+          void (async () => {
+            try {
+              const { migrateWalletKdfIfNeeded } = await import('../wallet/keys');
+              await migrateWalletKdfIfNeeded(payload.password);
+            } catch {
+              /* non-fatal — wallet still unlocks at the old speed next time */
+            }
+          })();
           return;
         }
 
